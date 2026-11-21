@@ -1,0 +1,6 @@
+{
+  "name": "VacuLeak — Vacuum Distillation Air Leakage Estimator",
+  "description": "Engineering calculator for estimating air in-leakage in vacuum distillation systems using HEI, Seider-Seader-Lewin, Ryans & Roper, and component inventory models.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
