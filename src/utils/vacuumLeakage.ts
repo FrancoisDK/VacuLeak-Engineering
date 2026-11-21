@@ -760,7 +760,7 @@ export function generateCsvReport(inputs: SystemInputs, summary: EstimationSumma
   const integrity = INTEGRITY_CLASSES.find((i) => i.id === inputs.integrityClass)?.name ?? inputs.integrityClass;
 
   const lines: string[] = [
-    'VacuLeak Engineering — Vacuum Distillation Air Leakage & Sizing Report',
+    'Vacuum Distillation Air Leakage & Equipment Sizing Report',
     `Generated,${new Date().toISOString()}`,
     '',
     'SYSTEM PARAMETERS',

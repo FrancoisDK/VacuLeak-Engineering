@@ -1,9 +1,13 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
+  BookmarkPlus,
   ChevronDown,
   ChevronRight,
   Download,
+  FileCode2,
+  FileText,
   RotateCcw,
+  Trash2,
 } from 'lucide-react';
 import {
   ComponentCounts,
@@ -23,6 +27,14 @@ import {
   estimateDefaultComponents,
   generateCsvReport,
 } from './utils/vacuumLeakage';
+import { generateStandaloneHtml } from './utils/standaloneHtml';
+import { exportSizingPdfReport } from './utils/pdfReport';
+import {
+  SavedPreset,
+  deleteUserPreset,
+  loadSavedPresets,
+  saveUserPreset,
+} from './utils/presetStorage';
 import { LeakageCurveChart } from './components/LeakageCurveChart';
 import { EquipmentSizingPanel } from './components/EquipmentSizingPanel';
 import { StandardsReference } from './components/StandardsReference';
@@ -79,6 +91,18 @@ export default function App() {
   const [colHeightM, setColHeightM] = useState<number>(9.5);
   const [pipingAllowancePct, setPipingAllowancePct] = useState<number>(30);
   const [showComponents, setShowComponents] = useState<boolean>(false);
+  const [savedPresets, setSavedPresets] = useState<SavedPreset[]>(() =>
+    loadSavedPresets()
+  );
+  const [isNamingPreset, setIsNamingPreset] = useState<boolean>(false);
+  const [presetNameInput, setPresetNameInput] = useState<string>('');
+  const [presetNotice, setPresetNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!presetNotice) return;
+    const timer = window.setTimeout(() => setPresetNotice(null), 3000);
+    return () => window.clearTimeout(timer);
+  }, [presetNotice]);
 
   const summary = useMemo(() => calculateVacuumLeakage(inputs), [inputs]);
 
@@ -89,6 +113,10 @@ export default function App() {
   const activeGasket = useMemo(
     () => GASKET_MATERIALS.find((g) => g.id === inputs.gasketMaterial)!,
     [inputs.gasketMaterial]
+  );
+  const activeSavedPreset = useMemo(
+    () => savedPresets.find((p) => p.id === inputs.presetId) ?? null,
+    [savedPresets, inputs.presetId]
   );
 
   const applyVolumeFromGeometry = (
@@ -108,14 +136,48 @@ export default function App() {
   };
 
   const handleSelectPreset = (presetId: string) => {
-    const preset = SYSTEM_PRESETS.find((p) => p.id === presetId);
-    if (!preset) return;
-    setSizeMode('direct');
-    setInputs((prev) => ({
-      ...prev,
-      ...preset.inputs,
-      presetId,
-    }));
+    const builtIn = SYSTEM_PRESETS.find((p) => p.id === presetId);
+    if (builtIn) {
+      setSizeMode('direct');
+      setInputs((prev) => ({
+        ...prev,
+        ...builtIn.inputs,
+        presetId,
+      }));
+      return;
+    }
+    const saved = savedPresets.find((p) => p.id === presetId);
+    if (saved) {
+      setSizeMode('direct');
+      setInputs({
+        ...saved.inputs,
+        componentCounts: { ...saved.inputs.componentCounts },
+        presetId: saved.id,
+      });
+    }
+  };
+
+  const handleSavePreset = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = presetNameInput.trim();
+    if (!trimmed) return;
+    const { presets, saved, ok } = saveUserPreset(trimmed, inputs);
+    setSavedPresets(presets);
+    setInputs((prev) => ({ ...prev, presetId: saved.id }));
+    setPresetNameInput('');
+    setIsNamingPreset(false);
+    setPresetNotice(
+      ok
+        ? `Saved "${saved.name}" to browser storage.`
+        : 'Unable to access browser localStorage.'
+    );
+  };
+
+  const handleDeleteSavedPreset = (id: string, name: string) => {
+    const next = deleteUserPreset(id);
+    setSavedPresets(next);
+    setInputs((prev) => ({ ...prev, presetId: 'custom' }));
+    setPresetNotice(`Removed saved preset "${name}".`);
   };
 
   const handleReset = () => {
@@ -132,7 +194,24 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `vaculeak_sizing_${inputs.volumeM3}m3_${inputs.pressureMbar}mbar.csv`;
+    link.download = `vacuum_air_leakage_sizing_${inputs.volumeM3}m3_${inputs.pressureMbar}mbar.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportPdf = () => {
+    exportSizingPdfReport(inputs, summary);
+  };
+
+  const handleDownloadHtml = () => {
+    const html = generateStandaloneHtml(inputs);
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `vacuum-leakage-estimator-${inputs.volumeM3}m3-${inputs.pressureMbar}mbar.html`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -170,7 +249,7 @@ export default function App() {
             href="#estimator"
             className="text-base font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
           >
-            VacuLeak Engineering
+            Vacuum Air Leakage
           </a>
 
           {/* Zone 2: 4 concise single-line nav links */}
@@ -208,11 +287,11 @@ export default function App() {
           <div className="shrink-0">
             <button
               type="button"
-              onClick={handleExportCsv}
+              onClick={handleExportPdf}
               className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-sky-700 hover:bg-sky-800 rounded-md transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-600"
             >
-              <Download className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Export Sizing Sheet</span>
+              <FileText className="w-3.5 h-3.5" aria-hidden="true" />
+              <span>Export PDF Report</span>
             </button>
           </div>
         </div>
@@ -233,12 +312,23 @@ export default function App() {
               Estimate air in-leakage rates and required suction capacity from system volume, operating vacuum (mbar), and construction materials.
             </p>
           </div>
-          <div className="text-xs text-slate-500 flex items-center gap-2 shrink-0">
-            <span>HEI Standards</span>
-            <span aria-hidden="true">·</span>
-            <span>Seider–Seader–Lewin</span>
-            <span aria-hidden="true">·</span>
-            <span>Ryans &amp; Roper</span>
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={handleExportCsv}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-800 bg-white border border-slate-300 hover:bg-slate-100 rounded-md transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-600"
+            >
+              <Download className="w-3.5 h-3.5 text-slate-600" aria-hidden="true" />
+              <span>Export CSV</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleDownloadHtml}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-800 bg-white border border-slate-300 hover:bg-slate-100 rounded-md transition-colors whitespace-nowrap shrink-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-600"
+            >
+              <FileCode2 className="w-3.5 h-3.5 text-sky-700" aria-hidden="true" />
+              <span>Download Offline HTML</span>
+            </button>
           </div>
         </div>
 
@@ -269,15 +359,102 @@ export default function App() {
                 onChange={(e) => handleSelectPreset(e.target.value)}
                 className="w-full h-9 px-2.5 text-xs bg-slate-50 border border-slate-300 rounded-md text-slate-900 focus:outline-none focus:border-sky-600"
               >
-                {SYSTEM_PRESETS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
+                <optgroup label="Standard Industry Presets">
+                  {SYSTEM_PRESETS.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </optgroup>
+                {savedPresets.length > 0 && (
+                  <optgroup label="Saved Configurations">
+                    {savedPresets.map((sp) => (
+                      <option key={sp.id} value={sp.id}>
+                        {sp.name} ({sp.inputs.volumeM3} m³ · {sp.inputs.pressureMbar} mbar)
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
                 {inputs.presetId === 'custom' && (
                   <option value="custom">Custom Engineering Parameters</option>
                 )}
               </select>
+
+              {isNamingPreset ? (
+                <form onSubmit={handleSavePreset} className="mt-2.5 space-y-2">
+                  <input
+                    type="text"
+                    value={presetNameInput}
+                    onChange={(e) => setPresetNameInput(e.target.value)}
+                    placeholder="Preset name (e.g., Crude Tower T-201)"
+                    maxLength={60}
+                    autoFocus
+                    aria-label="Configuration preset name"
+                    className="w-full h-8 px-2.5 text-xs bg-white border border-slate-300 rounded-md text-slate-900 focus:outline-none focus:border-sky-600"
+                  />
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsNamingPreset(false);
+                        setPresetNameInput('');
+                      }}
+                      className="px-2.5 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!presetNameInput.trim()}
+                      className="px-3 py-1 text-xs font-medium text-white bg-sky-700 hover:bg-sky-800 disabled:opacity-50 rounded transition-colors"
+                    >
+                      Save
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="mt-2.5 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPresetNameInput(
+                        activeSavedPreset ? activeSavedPreset.name : ''
+                      );
+                      setIsNamingPreset(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-700 hover:text-sky-800 transition-colors"
+                  >
+                    <BookmarkPlus className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>Save Current Preset</span>
+                  </button>
+
+                  {activeSavedPreset && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleDeleteSavedPreset(
+                          activeSavedPreset.id,
+                          activeSavedPreset.name
+                        )
+                      }
+                      aria-label={`Delete saved preset ${activeSavedPreset.name}`}
+                      className="inline-flex items-center gap-1 text-xs font-medium text-rose-700 hover:text-rose-800 transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />
+                      <span>Delete</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {presetNotice && (
+                <div
+                  role="status"
+                  className="mt-2 text-[11px] text-slate-600"
+                >
+                  {presetNotice}
+                </div>
+              )}
             </div>
 
             {/* 2. System Size / Volume */}
@@ -997,7 +1174,7 @@ export default function App() {
       <footer className="mt-10 border-t border-slate-200 bg-white">
         <div className="max-w-[1440px] mx-auto px-4 sm:px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
           <span>
-            VacuLeak Engineering · Vacuum Distillation Air In-Leakage &amp; Equipment Sizing
+            Vacuum Distillation Air In-Leakage &amp; Equipment Sizing
           </span>
           <span>
             Correlations: HEI Steam Jet Standards · Seider–Seader–Lewin · Ryans &amp; Roper · Perry&apos;s Ch. 10
