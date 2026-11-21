@@ -5,15 +5,20 @@ import {
   SystemInputs,
   VESSEL_MATERIALS,
 } from './vacuumLeakage';
+import { SavedPreset } from './presetStorage';
 
 /**
  * Generates a 100% self-contained, zero-dependency, offline-capable single HTML file
- * containing the complete VacuLeak Vacuum Distillation Air Leakage Estimator.
- * Embeds the user's current parameters as initial state.
+ * containing the complete Vacuum Distillation Air Leakage Estimator with offline PDF,
+ * CSV, and localStorage preset support.
  */
-export function generateStandaloneHtml(initialInputs: SystemInputs): string {
+export function generateStandaloneHtml(
+  initialInputs: SystemInputs,
+  initialSavedPresets: SavedPreset[] = []
+): string {
   const safeStateJson = JSON.stringify(initialInputs).replace(/<\//g, '<\\/');
   const safePresetsJson = JSON.stringify(SYSTEM_PRESETS).replace(/<\//g, '<\\/');
+  const safeSavedPresetsJson = JSON.stringify(initialSavedPresets).replace(/<\//g, '<\\/');
   const safeVesselsJson = JSON.stringify(VESSEL_MATERIALS).replace(/<\//g, '<\\/');
   const safeGasketsJson = JSON.stringify(GASKET_MATERIALS).replace(/<\//g, '<\\/');
   const safeIntegrityJson = JSON.stringify(INTEGRITY_CLASSES).replace(/<\//g, '<\\/');
@@ -114,6 +119,12 @@ export function generateStandaloneHtml(initialInputs: SystemInputs): string {
     footer { margin-top: 32px; background: var(--surface); border-top: 1px solid var(--border); padding: 14px 20px; font-size: 12px; color: var(--text-soft); }
     .footer-inner { max-width: 1400px; margin: 0 auto; display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
     .hidden { display: none !important; }
+    @media print {
+      header, .sidebar, .no-print { display: none !important; }
+      body { background: #fff; }
+      .layout { grid-template-columns: 1fr !important; }
+      .card { break-inside: avoid; border-color: #cbd5e1; }
+    }
   </style>
 </head>
 <body>
@@ -126,7 +137,7 @@ export function generateStandaloneHtml(initialInputs: SystemInputs): string {
         <a href="#sizing">Equipment Sizing</a>
         <a href="#standards">Standards</a>
       </nav>
-      <button type="button" id="btn-export-csv" class="btn btn-primary">Export Sizing Sheet (.csv)</button>
+      <button type="button" id="btn-export-pdf" class="btn btn-primary">Export PDF Report</button>
     </div>
   </header>
 
@@ -136,7 +147,10 @@ export function generateStandaloneHtml(initialInputs: SystemInputs): string {
         <h1>Vacuum Distillation Air Leakage Estimator</h1>
         <p class="subtitle">Standalone offline calculator for air in-leakage rates, suction capacity, and vacuum equipment sizing across HEI, Seider–Seader–Lewin, Ryans &amp; Roper, and Component Inventory models.</p>
       </div>
-      <div style="font-size:12px; color:var(--text-soft);">Standalone Offline Edition · Zero External Dependencies</div>
+      <div class="no-print" style="display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
+        <button type="button" id="btn-export-csv" class="btn btn-secondary">Export CSV</button>
+        <button type="button" id="btn-print" class="btn btn-secondary">Print Sheet</button>
+      </div>
     </div>
 
     <div class="layout">
@@ -148,6 +162,17 @@ export function generateStandaloneHtml(initialInputs: SystemInputs): string {
             <button type="button" id="btn-reset" class="btn btn-secondary" style="padding:3px 8px; font-size:11px;">Reset</button>
           </div>
           <select id="sel-preset"></select>
+          <div style="margin-top:8px; display:flex; align-items:center; justify-content:space-between; gap:8px;">
+            <button type="button" id="btn-save-preset" style="border:none; background:none; padding:0; color:var(--accent-dark); font-size:11px; font-weight:600; cursor:pointer;">+ Save Current Preset</button>
+            <button type="button" id="btn-del-preset" class="hidden" style="border:none; background:none; padding:0; color:#be123c; font-size:11px; font-weight:600; cursor:pointer;">Delete</button>
+          </div>
+          <div id="preset-form" class="hidden" style="margin-top:8px;">
+            <input type="text" id="inp-preset-name" maxlength="60" placeholder="Preset name (e.g. Tower T-201)" style="width:100%; height:30px; padding:0 8px; font-size:12px; border:1px solid var(--border-strong); border-radius:5px;" />
+            <div style="display:flex; justify-content:flex-end; gap:6px; margin-top:6px;">
+              <button type="button" id="btn-cancel-preset" class="btn btn-secondary" style="padding:3px 8px; font-size:11px;">Cancel</button>
+              <button type="button" id="btn-confirm-preset" class="btn btn-primary" style="padding:3px 10px; font-size:11px;">Save</button>
+            </div>
+          </div>
         </div>
 
         <div class="side-sec">
@@ -566,16 +591,66 @@ export function generateStandaloneHtml(initialInputs: SystemInputs): string {
     }
 
     const el = (id) => document.getElementById(id);
+    const STORAGE_KEY = 'vaculeak_saved_presets_v1';
+    const embeddedSaved = ${safeSavedPresetsJson};
 
-    // Populate dropdowns
-    PRESETS.forEach(p => {
-      const opt = document.createElement('option');
-      opt.value = p.id; opt.textContent = p.name;
-      el('sel-preset').appendChild(opt);
-    });
-    const customOpt = document.createElement('option');
-    customOpt.value = 'custom'; customOpt.textContent = 'Custom Engineering Parameters';
-    el('sel-preset').appendChild(customOpt);
+    function loadSaved() {
+      let local = [];
+      try {
+        if (window.localStorage) {
+          const raw = window.localStorage.getItem(STORAGE_KEY);
+          if (raw) {
+            const arr = JSON.parse(raw);
+            if (Array.isArray(arr)) local = arr;
+          }
+        }
+      } catch (e) {}
+      const merged = [...local];
+      embeddedSaved.forEach(ep => {
+        if (!merged.some(lp => lp.id === ep.id || lp.name.toLowerCase() === ep.name.toLowerCase())) {
+          merged.push(ep);
+        }
+      });
+      return merged;
+    }
+
+    let savedPresets = loadSaved();
+
+    function populatePresetDropdown() {
+      const sel = el('sel-preset');
+      sel.innerHTML = '';
+      const g1 = document.createElement('optgroup');
+      g1.label = 'Standard Industry Presets';
+      PRESETS.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p.id; opt.textContent = p.name;
+        g1.appendChild(opt);
+      });
+      sel.appendChild(g1);
+
+      if (savedPresets.length > 0) {
+        const g2 = document.createElement('optgroup');
+        g2.label = 'Saved Configurations';
+        savedPresets.forEach(sp => {
+          const opt = document.createElement('option');
+          opt.value = sp.id;
+          opt.textContent = sp.name + ' (' + sp.inputs.volumeM3 + ' m³ · ' + sp.inputs.pressureMbar + ' mbar)';
+          g2.appendChild(opt);
+        });
+        sel.appendChild(g2);
+      }
+
+      if (state.presetId === 'custom') {
+        const cOpt = document.createElement('option');
+        cOpt.value = 'custom'; cOpt.textContent = 'Custom Engineering Parameters';
+        sel.appendChild(cOpt);
+      }
+      sel.value = state.presetId;
+      const isSavedActive = savedPresets.some(sp => sp.id === state.presetId);
+      el('btn-del-preset').classList.toggle('hidden', !isSavedActive);
+    }
+
+    populatePresetDropdown();
 
     VESSELS.forEach(v => {
       const opt = document.createElement('option');
@@ -849,14 +924,204 @@ export function generateStandaloneHtml(initialInputs: SystemInputs): string {
         '</span>';
     }
 
+    // Pure-JS Zero-Dependency PDF 1.4 Binary Writer (A4 Engineering Datasheet)
+    function buildOfflinePdfBytes(s) {
+      const PW = 595.28, PH = 841.89, MM = 2.83464567;
+      const cmds = [];
+      const pdfSafe = (str) => String(str)
+        .replace(/[^\\x20-\\x7E]/g, (ch) => {
+          if (ch === '°') return ' deg ';
+          if (ch === '³') return '3';
+          if (ch === '×') return 'x';
+          if (ch === '·') return '|';
+          if (ch === '–' || ch === '—') return '-';
+          if (ch === '→') return '->';
+          if (ch === '≤') return '<=';
+          if (ch === 'Φ') return 'Phi';
+          if (ch === 'ρ') return 'rho';
+          return '';
+        })
+        .replace(/\\\\/g, '\\\\\\\\')
+        .replace(/\\(/g, '\\\\(')
+        .replace(/\\)/g, '\\\\)');
+
+      const py = (topMm) => PH - topMm * MM;
+      const px = (leftMm) => leftMm * MM;
+      const fillRect = (xMm, yMm, wMm, hMm, r, g, b) => {
+        cmds.push((r/255).toFixed(3) + ' ' + (g/255).toFixed(3) + ' ' + (b/255).toFixed(3) + ' rg ' +
+          px(xMm).toFixed(2) + ' ' + py(yMm + hMm).toFixed(2) + ' ' + (wMm*MM).toFixed(2) + ' ' + (hMm*MM).toFixed(2) + ' re f');
+      };
+      const strokeRect = (xMm, yMm, wMm, hMm, r, g, b, lw) => {
+        cmds.push((lw || 0.5).toFixed(2) + ' w ' + (r/255).toFixed(3) + ' ' + (g/255).toFixed(3) + ' ' + (b/255).toFixed(3) + ' RG ' +
+          px(xMm).toFixed(2) + ' ' + py(yMm + hMm).toFixed(2) + ' ' + (wMm*MM).toFixed(2) + ' ' + (hMm*MM).toFixed(2) + ' re S');
+      };
+      const txt = (str, xMm, yMm, size, bold, r, g, b) => {
+        cmds.push('BT /' + (bold ? 'F2' : 'F1') + ' ' + size + ' Tf ' +
+          (r/255).toFixed(3) + ' ' + (g/255).toFixed(3) + ' ' + (b/255).toFixed(3) + ' rg ' +
+          px(xMm).toFixed(2) + ' ' + py(yMm).toFixed(2) + ' Td (' + pdfSafe(str) + ') Tj ET');
+      };
+      const drawTable = (startY, headers, rows, colXs, rightCols) => {
+        let y = startY;
+        const rowH = 6.2;
+        fillRect(14, y, 182, rowH, 241, 245, 249);
+        strokeRect(14, y, 182, rowH, 203, 213, 225, 0.4);
+        headers.forEach((h, i) => {
+          txt(h, colXs[i] + 1.5, y + 4.3, 7.8, true, 51, 65, 85);
+        });
+        y += rowH;
+        rows.forEach((row, rIdx) => {
+          const isHighlight = row._highlight;
+          if (isHighlight) fillRect(14, y, 182, rowH, 240, 249, 255);
+          else if (rIdx % 2 === 1) fillRect(14, y, 182, rowH, 248, 250, 252);
+          strokeRect(14, y, 182, rowH, 226, 232, 240, 0.35);
+          row.cells.forEach((cell, i) => {
+            const isB = isHighlight && (i === 0 || i === 2);
+            txt(cell, colXs[i] + 1.5, y + 4.3, 7.6, isB, 30, 41, 59);
+          });
+          y += rowH;
+        });
+        return y;
+      };
+
+      // Header Banner
+      fillRect(0, 0, 210, 26, 15, 23, 42);
+      txt('Vacuum Distillation Air Leakage Report', 14, 10.5, 13.5, true, 255, 255, 255);
+      txt('Air In-Leakage Estimation & Vacuum System Sizing Datasheet (Offline)', 14, 17, 9, false, 203, 213, 225);
+      txt('Generated: ' + new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC', 135, 10.5, 7.5, false, 148, 163, 184);
+      txt('Basis: ' + s.sel.name, 135, 17, 7.5, false, 148, 163, 184);
+
+      // KPI Strip
+      const kpis = [
+        { t: 'DESIGN AIR LEAKAGE', v: s.dAir.toFixed(2) + ' kg/h', sub: s.dLb.toFixed(2) + ' lb/h (' + state.designMargin.toFixed(2) + 'x)' },
+        { t: 'TOTAL SUCTION FLOW', v: s.totFlow.toFixed(1) + ' m3/h', sub: (s.totFlow * M3H_ACFM).toFixed(1) + ' ACFM (incl. vapor)' },
+        { t: 'FLOW REGIME', v: s.pMbar <= P_CRIT ? 'Sonic Choked' : 'Subsonic', sub: 'rho=' + s.rho.toFixed(4) + ' | Phi=' + s.ff.toFixed(2) },
+        { t: 'RECOMMENDED TRAIN', v: s.stages.slice(0, 22), sub: 'Est. ' + s.pwr.toFixed(1) + ' kW shaft' }
+      ];
+      kpis.forEach((k, idx) => {
+        const x = 14 + idx * 46.2;
+        fillRect(x, 31, 43.4, 19, 248, 250, 252);
+        strokeRect(x, 31, 43.4, 19, 226, 232, 240, 0.5);
+        txt(k.t, x + 2.5, 35.8, 6.4, true, 100, 116, 139);
+        txt(k.v, x + 2.5, 42.2, 9.5, true, 15, 23, 42);
+        txt(k.sub, x + 2.5, 47.4, 6.5, false, 71, 85, 105);
+      });
+
+      // Section 1: Process Conditions & Materials
+      let y = 58;
+      txt('1. Process Conditions & Construction Materials', 14, y, 10, true, 15, 23, 42);
+      y = drawTable(y + 3, ['Parameter', 'Value', 'Material / Integrity Spec', 'Factor / Detail'], [
+        { cells: ['Evacuated Volume', state.volumeM3.toFixed(2) + ' m3 (' + (state.volumeM3*M3_FT3).toFixed(1) + ' ft3)', 'Vessel Material', s.vSpec.shortName + ' (' + s.vSpec.factor.toFixed(2) + 'x)'] },
+        { cells: ['Operating Vacuum', state.pressureMbar.toFixed(2) + ' mbar (' + (state.pressureMbar*MBAR_TORR).toFixed(1) + ' Torr)', 'Gasket / Seal', s.gSpec.shortName + ' (' + s.gSpec.factor.toFixed(2) + 'x)'] },
+        { cells: ['Suction Temp', state.suctionTempC.toFixed(1) + ' deg C', 'Integrity Class', s.iSpec.name + ' (' + s.iSpec.factor.toFixed(2) + 'x)'] },
+        { cells: ['Suction Air Density', s.rho.toFixed(4) + ' kg/m3', 'Combined Factor', s.comb.toFixed(3) + 'x'] }
+      ], [14, 52, 95, 138]);
+
+      // Section 2: Model Comparison
+      y += 7;
+      txt('2. Industry-Standard Air Leakage Model Comparison', 14, y, 10, true, 15, 23, 42);
+      y = drawTable(y + 3, ['Model', 'Base (kg/h)', 'Adj. (kg/h)', 'Adj. (lb/h)', 'Flow (m3/h)', 'Flow (ACFM)'],
+        s.models.map(m => ({
+          _highlight: m.id === state.primaryModel,
+          cells: [
+            m.name + (m.id === state.primaryModel ? ' [SEL]' : ''),
+            m.base.toFixed(3),
+            m.adj.toFixed(3),
+            m.lb.toFixed(3),
+            m.flow.toFixed(1),
+            m.acfm.toFixed(1)
+          ]
+        })),
+        [14, 72, 97, 122, 147, 172]
+      );
+
+      // Section 3: Auxiliary Sizing
+      y += 7;
+      txt('3. Vacuum System & Auxiliary Equipment Sizing Basis', 14, y, 10, true, 15, 23, 42);
+      const vLabel = state.vaporSpecies === 'dry_air_only' ? 'Dry Air Only' : (VAPOR_SPECS[state.vaporSpecies].name + ' @ ' + state.condenserTempC + 'C');
+      y = drawTable(y + 3, ['Sizing Parameter', 'Calculated Value', 'Engineering Context'], [
+        { cells: ['Design Dry Air Load', s.dAir.toFixed(3) + ' kg/h (' + s.dLb.toFixed(3) + ' lb/h)', s.sel.name + ' x ' + state.designMargin.toFixed(2) + 'x margin'] },
+        { cells: ['Vapor Carryover', s.vapCarry.toFixed(3) + ' kg/h (Pvap ' + s.pVap.toFixed(1) + ' mbar)', vLabel] },
+        { cells: ['Total Suction Load', (s.dAir + s.vapCarry).toFixed(3) + ' kg/h | ' + s.totFlow.toFixed(1) + ' m3/h', (s.totFlow * M3H_ACFM).toFixed(1) + ' ACFM total load'] },
+        { cells: ['Pump-Down Estimate', s.pDown.toFixed(0) + ' min (1013 -> ' + state.pressureMbar + ' mbar)', 'Recommended: ' + s.tech] }
+      ], [14, 58, 122]);
+
+      // Section 4: Component Inventory
+      y += 7;
+      txt('4. Component & Seal Inventory Leakage Breakdown', 14, y, 10, true, 15, 23, 42);
+      y = drawTable(y + 3, ['Component / Seal Type', 'Qty', 'Total (kg/h)', 'Share (%)'],
+        s.invRows.map(r => ({
+          cells: [r.label, String(r.count), r.totalKgH.toFixed(4), r.share.toFixed(1) + '%']
+        })),
+        [14, 105, 130, 165]
+      );
+
+      txt('Basis: Orifice air leakage is sonic-choked below 535.3 mbar (Phi = 1.0). Suction volume uses Ideal Gas Law at suction P and T.', 14, y + 7, 7.2, false, 100, 116, 139);
+      txt('Vacuum Distillation Sizing Report (Offline Export)  |  Page 1 of 1', 64, 286, 7.5, false, 148, 163, 184);
+
+      const stream = cmds.join('\\n');
+      const objs = [
+        '1 0 obj\\n<< /Type /Catalog /Pages 2 0 R >>\\nendobj\\n',
+        '2 0 obj\\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\\nendobj\\n',
+        '3 0 obj\\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>\\nendobj\\n',
+        '4 0 obj\\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\\nendobj\\n',
+        '5 0 obj\\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>\\nendobj\\n',
+        '6 0 obj\\n<< /Length ' + stream.length + ' >>\\nstream\\n' + stream + '\\nendstream\\nendobj\\n'
+      ];
+      let pdf = '%PDF-1.4\\n';
+      const offsets = [0];
+      objs.forEach(o => {
+        offsets.push(pdf.length);
+        pdf += o;
+      });
+      const xrefPos = pdf.length;
+      pdf += 'xref\\n0 ' + (objs.length + 1) + '\\n0000000000 65535 f \\n';
+      for (let i = 1; i < offsets.length; i++) {
+        pdf += String(offsets[i]).padStart(10, '0') + ' 00000 n \\n';
+      }
+      pdf += 'trailer\\n<< /Size ' + (objs.length + 1) + ' /Root 1 0 R >>\\nstartxref\\n' + xrefPos + '\\n%%EOF';
+      return pdf;
+    }
+
     // Event bindings
     el('sel-preset').addEventListener('change', (e) => {
-      const p = PRESETS.find(x => x.id === e.target.value);
-      if (!p) return;
-      state = { ...state, ...p.inputs, presetId: p.id };
-      render();
+      const id = e.target.value;
+      const p = PRESETS.find(x => x.id === id);
+      if (p) {
+        state = { ...state, ...p.inputs, presetId: p.id };
+        populatePresetDropdown(); render(); return;
+      }
+      const sp = savedPresets.find(x => x.id === id);
+      if (sp) {
+        state = { ...sp.inputs, componentCounts: { ...sp.inputs.componentCounts }, presetId: sp.id };
+        populatePresetDropdown(); render();
+      }
     });
-    el('btn-reset').addEventListener('click', () => { state = ${safeStateJson}; render(); });
+    el('btn-save-preset').addEventListener('click', () => {
+      const cur = savedPresets.find(x => x.id === state.presetId);
+      el('inp-preset-name').value = cur ? cur.name : '';
+      el('preset-form').classList.remove('hidden');
+      el('inp-preset-name').focus();
+    });
+    el('btn-cancel-preset').addEventListener('click', () => { el('preset-form').classList.add('hidden'); });
+    el('btn-confirm-preset').addEventListener('click', () => {
+      const name = el('inp-preset-name').value.trim().slice(0, 60);
+      if (!name) return;
+      const idx = savedPresets.findIndex(p => p.name.toLowerCase() === name.toLowerCase());
+      const id = idx >= 0 ? savedPresets[idx].id : ('user_' + Date.now());
+      const entry = { id, name, savedAt: new Date().toISOString(), inputs: { ...state, presetId: id, componentCounts: { ...state.componentCounts } } };
+      if (idx >= 0) savedPresets[idx] = entry; else savedPresets.unshift(entry);
+      try { if (window.localStorage) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(savedPresets)); } catch (err) {}
+      state.presetId = id;
+      el('preset-form').classList.add('hidden');
+      populatePresetDropdown(); render();
+    });
+    el('btn-del-preset').addEventListener('click', () => {
+      savedPresets = savedPresets.filter(p => p.id !== state.presetId);
+      try { if (window.localStorage) window.localStorage.setItem(STORAGE_KEY, JSON.stringify(savedPresets)); } catch (err) {}
+      state.presetId = 'custom';
+      populatePresetDropdown(); render();
+    });
+    el('btn-reset').addEventListener('click', () => { state = ${safeStateJson}; populatePresetDropdown(); render(); });
     el('tab-direct').addEventListener('click', () => {
       el('tab-direct').classList.add('active'); el('tab-geom').classList.remove('active');
       el('panel-direct').classList.remove('hidden'); el('panel-geom').classList.add('hidden');
@@ -874,32 +1139,32 @@ export function generateStandaloneHtml(initialInputs: SystemInputs): string {
       state.volumeM3 = Math.max(0.05, v);
       state.presetId = 'custom';
       el('lbl-geom-vol').textContent = state.volumeM3.toFixed(2) + ' m³ (' + (state.volumeM3 * M3_FT3).toFixed(1) + ' ft³)';
-      render();
+      populatePresetDropdown(); render();
     }
     ['inp-diam', 'inp-height', 'inp-allow'].forEach(id => el(id).addEventListener('input', updateGeom));
     el('inp-volume').addEventListener('input', (e) => {
       state.volumeM3 = Math.max(0.05, Math.min(2000, Number(e.target.value) || 0.05));
-      state.presetId = 'custom'; render();
+      state.presetId = 'custom'; populatePresetDropdown(); render();
     });
     el('rng-volume').addEventListener('input', (e) => {
       const v = fromLog(Number(e.target.value), 0.05, 500);
       state.volumeM3 = v < 1 ? Number(v.toFixed(2)) : v < 20 ? Number(v.toFixed(1)) : Math.round(v);
-      state.presetId = 'custom'; render();
+      state.presetId = 'custom'; populatePresetDropdown(); render();
     });
     el('inp-pressure').addEventListener('input', (e) => {
       state.pressureMbar = Math.max(0.1, Math.min(980, Number(e.target.value) || 0.1));
-      state.presetId = 'custom'; render();
+      state.presetId = 'custom'; populatePresetDropdown(); render();
     });
     el('rng-pressure').addEventListener('input', (e) => {
       const p = fromLog(Number(e.target.value), 0.2, 950);
       state.pressureMbar = p < 5 ? Number(p.toFixed(2)) : p < 50 ? Number(p.toFixed(1)) : Math.round(p);
-      state.presetId = 'custom'; render();
+      state.presetId = 'custom'; populatePresetDropdown(); render();
     });
     el('inp-temp').addEventListener('input', (e) => { state.suctionTempC = Math.max(-20, Math.min(150, Number(e.target.value) || 20)); render(); });
-    el('sel-vessel').addEventListener('change', (e) => { state.vesselMaterial = e.target.value; state.presetId = 'custom'; render(); });
-    el('sel-gasket').addEventListener('change', (e) => { state.gasketMaterial = e.target.value; state.presetId = 'custom'; render(); });
+    el('sel-vessel').addEventListener('change', (e) => { state.vesselMaterial = e.target.value; state.presetId = 'custom'; populatePresetDropdown(); render(); });
+    el('sel-gasket').addEventListener('change', (e) => { state.gasketMaterial = e.target.value; state.presetId = 'custom'; populatePresetDropdown(); render(); });
     document.querySelectorAll('[data-integrity]').forEach(btn => {
-      btn.addEventListener('click', () => { state.integrityClass = btn.getAttribute('data-integrity'); state.presetId = 'custom'; render(); });
+      btn.addEventListener('click', () => { state.integrityClass = btn.getAttribute('data-integrity'); state.presetId = 'custom'; populatePresetDropdown(); render(); });
     });
     el('btn-toggle-comp').addEventListener('click', () => { el('panel-comp').classList.toggle('hidden'); render(); });
     el('btn-autoscale').addEventListener('click', () => {
@@ -913,12 +1178,12 @@ export function generateStandaloneHtml(initialInputs: SystemInputs): string {
         stuffingBoxes: 0,
         threadedFittings: Math.max(2, Math.round(2.5 * sc))
       };
-      state.presetId = 'custom'; render();
+      state.presetId = 'custom'; populatePresetDropdown(); render();
     });
     document.querySelectorAll('[data-comp]').forEach(inp => {
       inp.addEventListener('input', (e) => {
         state.componentCounts[inp.getAttribute('data-comp')] = Math.max(0, Math.round(Number(e.target.value) || 0));
-        state.presetId = 'custom'; render();
+        state.presetId = 'custom'; populatePresetDropdown(); render();
       });
     });
     el('btn-mode-mass').addEventListener('click', () => { chartMode = 'mass'; el('btn-mode-mass').classList.add('active'); el('btn-mode-vol').classList.remove('active'); render(); });
@@ -939,9 +1204,24 @@ export function generateStandaloneHtml(initialInputs: SystemInputs): string {
       if (hoverIdx !== null && lastSamples[hoverIdx]) {
         const p = lastSamples[hoverIdx].p;
         state.pressureMbar = Number(p.toFixed(p < 10 ? 2 : 1));
-        state.presetId = 'custom'; render();
+        state.presetId = 'custom'; populatePresetDropdown(); render();
       }
     });
+
+    el('btn-export-pdf').addEventListener('click', () => {
+      const s = computeAll();
+      const pdfStr = buildOfflinePdfBytes(s);
+      const bytes = new Uint8Array(pdfStr.length);
+      for (let i = 0; i < pdfStr.length; i++) bytes[i] = pdfStr.charCodeAt(i) & 0xff;
+      const blob = new Blob([bytes], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'vacuum-leakage-report-' + state.volumeM3 + 'm3-' + state.pressureMbar + 'mbar.pdf';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+
+    el('btn-print').addEventListener('click', () => { window.print(); });
 
     el('btn-export-csv').addEventListener('click', () => {
       const s = computeAll();

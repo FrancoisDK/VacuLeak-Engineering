@@ -206,7 +206,7 @@ export default function App() {
   };
 
   const handleDownloadHtml = () => {
-    const html = generateStandaloneHtml(inputs);
+    const html = generateStandaloneHtml(inputs, savedPresets);
     const blob = new Blob([html], { type: 'text/html;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
